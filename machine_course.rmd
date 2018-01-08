@@ -1,0 +1,146 @@
+---
+author: "Elena Golovanova"
+date: "January 7, 2018"
+output: html_document
+---
+#Practical Machine Learning - Course Project
+##Introduction
+Six participants are participating in this research study. Input data of this project consists of accelerometers readings from the belt, forearm, arm and dumbell of these six participants.
+
+Each traininig data set constsis of accelerometer data and a label that describes the activity quality, for each participant.
+
+Testing data consists of accelerometer data without the identifying label.
+
+The goal is to predict the labels based on the test set of observations.
+
+Code below is provided that creates the model, estimates the out-of-sample error and makes predictions. A brief description is provided for each section.
+
+##Preparing Data
+We use caret library. Training and testing data read from CSV files:
+
+```{r message=FALSE}
+library(lattice)
+library(ggplot2)
+library(caret)
+
+testing_set  <- read.csv("pml-testing.csv")
+training_set <- read.csv("pml-training.csv")
+
+```
+First we initialize a random seed in order to randomly split the training data set. That allows us to estimate the out-of-sample error. We split the full training data set (training_set) into a smaller training set (training_set1) plus a validation set (training_set2):
+```{r}  
+
+# set random seed
+set.seed(10)
+
+# split into two sets
+training_partition <- createDataPartition(y=training_set$classe, p=0.7, list=F)
+training_set1 <- training_set[training_partition, ]
+training_set2 <- training_set[-training_partition, ]
+
+```
+By removing variables with near-zero variance we reduce the number of features. We would also remove variables that are almost always NA and those that don’t make intuitive sense for prediction. Decision on what to remove is made by analyzing training_set1, then by performing identical removals on training_set2:
+```{r}
+
+# remove near-zero variance variables
+near_zero_vars <- nearZeroVar(training_set1)
+training_set1 <- training_set1[, -near_zero_vars]
+training_set2 <- training_set2[, -near_zero_vars]
+
+# remove almost always NA variables
+NA_vars <- sapply(training_set1, function(x) mean(is.na(x))) > 0.95
+training_set1 <- training_set1[, NA_vars==F]
+training_set2 <- training_set2[, NA_vars==F]
+
+# remove variables that are not important for prediction:
+# X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp
+# These are the first five in the list
+first_five <- (1:5)
+training_set1 <- training_set1[, -first_five]
+training_set2 <- training_set2[, -first_five]
+```
+
+##Building the model
+First we build a Random Forest model to evaluate if it has acceptable performance. We train the model on training_set1 by invoking the “train” function to use cross-validation, 3-fold, no verbose iteration. That should help to tune for the most optimal parameters.
+
+```{r message=FALSE}
+library(randomForest)
+
+# Use trainControl CV 3-fold method for parameters tuning
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+
+# Use Random Forest method for fit model , training it on training_set1
+fit <- train(classe ~ ., data=training_set1, method="rf", trControl=fitControl)
+
+# Print out the tuning parameters chosen by the final model
+fit$finalModel
+```
+
+The algorithm decided to use 500 trees with 27 variables tried at each split.
+
+##Evaluating and Selecting the Model
+We use the fitted model for prediction of the label (“classe”) in training_set2.
+
+This is the confusion matrix that compares predicted vs. actual labels:
+```{r}  
+# Invoke predict on fit model using validation set (training_set2)
+preds <- predict(fit, newdata=training_set2)
+
+# Show confusion matrix to estimate the out-of-sample error
+confusionMatrix(training_set2$classe, preds)
+```
+
+Accuracy is 99.81%. Predicted accuracy for the out-of-sample error is ~0.2%.
+Since the accuracy is already very good, we will also use Random Forest algorithm on the test set.
+
+##Selected Model Retraining
+Prior to running predictions on the test set, we retrain the model using complete training set (training_set) instead of a reduced set (training_set1). This will result in the most accurate predictions.
+
+Let's repeat the above process on (training_set) and (testing_set):
+```{r}  
+
+# remove near-zero variance variables
+near_zero_vars <- nearZeroVar(training_set)
+training_set <- training_set[, -near_zero_vars]
+testing_set  <- testing_set[, -near_zero_vars]
+
+# remove almost always NA variables
+NA_vars <- sapply(training_set, function(x) mean(is.na(x))) > 0.95
+training_set <- training_set[, NA_vars==F]
+testing_set  <- testing_set[, NA_vars==F]
+
+# remove variables that are not important for prediction:
+# X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp
+# These are the first five in the list
+first_five <- (1:5)
+training_set <- training_set[, -first_five]
+testing_set  <- testing_set[, -first_five]
+
+# retrain on complete training set (training_set)
+fitControl <- trainControl(method="cv", number=3, verboseIter=F)
+fit <- train(classe ~ ., data=training_set, method="rf", trControl=fitControl)
+```
+
+##Label predictions for the test set
+Model fit we constructed above is being used to predict the observation labels using training_set as input data. Predictions output is written to separate files:
+```{r}  
+
+# predict for testing_set
+preds <- predict(fit, newdata=testing_set)
+
+# interpret as character array
+arr <- as.character(preds)
+
+# create function to write predictions to files
+pml_files_create <- function(arr)
+{
+  for (i in 1:length(arr))
+  {
+    filename <- paste0("problem_id_", i, ".txt")
+    write.table(arr[i], file=filename, quote=F, row.names=F, col.names=F)
+  }
+}
+
+# create separate problem_id_${N}.txt prediction files
+pml_files_create(arr)
+```
